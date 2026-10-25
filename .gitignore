@@ -1,1 +1,7 @@
 .venv/
+.vscode/
+
+# Cache di Python
+**/__pycache__/
+*.py[cod]
+*$py.class
