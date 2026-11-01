@@ -1,8 +1,8 @@
-import torch
 import pytest
+import torch
 
-from utils.metrics import intersection_over_union, non_max_suppression as nms
 from utils.box_formats import BoxFormat
+from utils.metrics import intersection_over_union, mean_average_precision, non_max_suppression as nms
 
 @pytest.mark.unit
 class TestIntersectionOverUnion():
@@ -286,3 +286,196 @@ class TestNonMaxSuppression:
 
         assert len(bboxes) == len(expected_boxes)
         assert all(torch.equal(box, expected_box) for box, expected_box in zip(bboxes, expected_boxes))
+
+@pytest.mark.unit
+class TestMeanAveragePrecision:
+    EPSILON = 1e-4
+
+    @pytest.mark.boundary
+    def test_wrong_pred_boxes_type(self):
+        with pytest.raises(TypeError):
+            mean_average_precision(
+                pred_boxes="not-a-list",
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold=0.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=20,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_labels_boxes_type(self):
+        with pytest.raises(TypeError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes="not-a-list",
+                iou_threshold=0.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=20,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_iou_threshold_type(self):
+        with pytest.raises(TypeError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold="not-a-float",
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=20,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_box_format_type(self):
+        with pytest.raises(TypeError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold=0.5,
+                box_format="not-a-box-format",
+                num_classes=20,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_num_classes_type(self):
+        with pytest.raises(TypeError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold=0.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes="not-an-int",
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_iou_threshold_value(self):
+        with pytest.raises(ValueError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold=1.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=20,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_num_classes_value(self):
+        with pytest.raises(ValueError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold=0.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=-1,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_pred_boxes_shape(self):
+        with pytest.raises(ValueError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3])],
+                labels_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                iou_threshold=0.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=20,
+            )
+
+    @pytest.mark.boundary
+    def test_wrong_labels_boxes_shape(self):
+        with pytest.raises(ValueError):
+            mean_average_precision(
+                pred_boxes=[torch.tensor([1, 2, 3, 4, 5, 6])],
+                labels_boxes=[torch.tensor([1, 2, 3])],
+                iou_threshold=0.5,
+                box_format=BoxFormat.MIDDLE_POINT,
+                num_classes=20,
+            )
+
+    def test_all_correct_one_class(self):
+        t1_preds = [
+            torch.Tensor([0, 0, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+        t1_targets = [
+            torch.Tensor([0, 0, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+
+        mean_avg_prec = mean_average_precision(
+            t1_preds,
+            t1_targets,
+            iou_threshold=0.5,
+            box_format=BoxFormat.MIDDLE_POINT,
+            num_classes=1,
+        )
+
+        assert mean_avg_prec == pytest.approx(1, abs=self.EPSILON)
+
+    def test_all_correct_batch(self):
+        t2_preds = [
+            torch.Tensor([1, 0, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+        t2_targets = [
+            torch.Tensor([1, 0, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+
+        mean_avg_prec = mean_average_precision(
+            t2_preds,
+            t2_targets,
+            iou_threshold=0.5,
+            box_format=BoxFormat.MIDDLE_POINT,
+            num_classes=1,
+        )
+
+        assert mean_avg_prec == pytest.approx(1, abs=self.EPSILON)
+
+    def test_all_wrong_class(self):
+        t3_preds = [
+            torch.Tensor([0, 1, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 1, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 1, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+        t3_targets = [
+            torch.Tensor([0, 0, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+
+        mean_avg_prec = mean_average_precision(
+            t3_preds,
+            t3_targets,
+            iou_threshold=0.5,
+            box_format=BoxFormat.MIDDLE_POINT,
+            num_classes=2,
+        )
+
+        assert mean_avg_prec == pytest.approx(0.0, abs=self.EPSILON)
+
+    def test_one_inaccurate_box(self):
+        t4_preds = [
+            torch.Tensor([0, 0, 0.9, 0.15, 0.25, 0.1, 0.1]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+    
+        t4_targets = [
+            torch.Tensor([0, 0, 0.9, 0.55, 0.2, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.8, 0.35, 0.6, 0.3, 0.2]),
+            torch.Tensor([0, 0, 0.7, 0.8, 0.7, 0.2, 0.2]),
+        ]
+        t4_correct_mAP = 5 / 18
+
+        mean_avg_prec = mean_average_precision(
+            t4_preds,
+            t4_targets,
+            iou_threshold=0.5,
+            box_format=BoxFormat.MIDDLE_POINT,
+            num_classes=1,
+        )
+
+        assert mean_avg_prec == pytest.approx(t4_correct_mAP, abs=self.EPSILON)
