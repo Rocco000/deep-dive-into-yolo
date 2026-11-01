@@ -1,5 +1,4 @@
 import torch
-from profiling.tracing import label
 from utils.box_formats import BoxFormat
 from utils.boxes import middlepoint_to_cornerpoint
 
@@ -125,8 +124,8 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
     Compute the mean average precision (mAP) using the given IoU threshold.
 
     Args:
-        pred_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the predicted bounding boxes in the format (sample_idx, class, score, x1, y1, x2, y2).
-        labels_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the ground truth bounding boxes in the format (sample_idx, class, score, x1, y1, x2, y2). Where score is 1 for ground truth boxes.
+        pred_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the predicted bounding boxes in the format (sample_idx, class, score, x, y, w, h).
+        labels_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the ground truth bounding boxes in the format (sample_idx, class, score, x, y, w, h). Where score is 1 for ground truth boxes.
         iou_threshold (float): The Intersection over Union (IoU) threshold for determining true positives. Default is 0.5.
         box_format (BoxFormat): The format of the bounding boxes. Default is BoxFormat.CORNER_POINT.
         num_classes (int): The number of classes in the dataset. Default is 20.
@@ -150,10 +149,11 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
     if not (num_classes > 0):
         raise ValueError(f"num_classes must be a positive integer, got {num_classes}")
 
-    if pred_boxes.ndim != 1 or pred_boxes.shape[1] != 7:
-        raise ValueError(f"pred_boxes must be of shape (7,), got {pred_boxes.shape}")
-    if labels_boxes.ndim != 1 or labels_boxes.shape[1] != 7:
-        raise ValueError(f"labels_boxes must be of shape (7,), got {labels_boxes.shape}")
+    if not all(box.ndim == 1 and box.shape[0] == 7 for box in pred_boxes):
+        raise ValueError("Each predicted bounding box tensor must be of shape (7), where 7 corresponds to (sample_idx, class, score, x, y, w, h).")
+
+    if not all(box.ndim == 1 and box.shape[0] == 7 for box in labels_boxes):
+        raise ValueError("Each ground truth bounding box tensor must be of shape (7), where 7 corresponds to (sample_idx, class, score, x, y, w, h).")
 
     average_precisions: list[torch.Tensor] = []
 
@@ -171,7 +171,7 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
         # Count the number of ground truth boxes per sample for the current class
         coverage_per_sample: dict[int, int] = {}
         for box in labels_boxes_per_class:
-            sample_idx = box[0]
+            sample_idx = int(box[0].item())
             if sample_idx not in coverage_per_sample:
                 coverage_per_sample[sample_idx] = 1
             else:
@@ -200,12 +200,13 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
 
             # Get the ground truth box with the highest IoU for the current predicted box
             for i, gt_box in enumerate(gt_boxes):
-                iou = intersection_over_union(pred_box[3:].unsqueeze(0), gt_box[2:].unsqueeze(0), box_format)
+                iou = intersection_over_union(pred_box[3:].unsqueeze(0), gt_box[3:].unsqueeze(0), box_format)
                 if iou > max_iou:
                     max_iou = iou
                     max_index = i
 
             if max_iou > iou_threshold:
+                sample_idx = int(sample_idx.item())
                 if coverage_per_sample[sample_idx][max_index] == 0:
                     # TP: if it has IoU > threshold and the corresponding ground truth box has not been detected yet
                     TP[pred_idx] = 1
