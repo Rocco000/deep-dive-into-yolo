@@ -1,4 +1,5 @@
 import torch
+from profiling.tracing import label
 from utils.box_formats import BoxFormat
 from utils.boxes import middlepoint_to_cornerpoint
 
@@ -125,7 +126,7 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
 
     Args:
         pred_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the predicted bounding boxes in the format (sample_idx, class, score, x1, y1, x2, y2).
-        labels_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the ground truth bounding boxes in the format (sample_idx, class, x1, y1, x2, y2).
+        labels_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the ground truth bounding boxes in the format (sample_idx, class, score, x1, y1, x2, y2). Where score is 1 for ground truth boxes.
         iou_threshold (float): The Intersection over Union (IoU) threshold for determining true positives. Default is 0.5.
         box_format (BoxFormat): The format of the bounding boxes. Default is BoxFormat.CORNER_POINT.
         num_classes (int): The number of classes in the dataset. Default is 20.
@@ -162,8 +163,10 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
         labels_boxes_per_class: list[torch.Tensor] = [box for box in labels_boxes if box[1] == c]
 
         num_gt_boxes: int = len(labels_boxes_per_class)
-        TP: torch.Tensor = torch.zeros(len(pred_boxes_per_class))
-        FP: torch.Tensor = torch.zeros(len(pred_boxes_per_class))
+
+        # If there are no ground truth boxes for the current class, skip (we can't compute AP for this class)
+        if num_gt_boxes == 0:
+            continue
 
         # Count the number of ground truth boxes per sample for the current class
         coverage_per_sample: dict[int, int] = {}
@@ -181,6 +184,9 @@ def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[to
 
         # Order predicted boxes by confidence score in descending order
         pred_boxes_per_class.sort(key=lambda x: x[2], reverse=True)
+
+        TP: torch.Tensor = torch.zeros(len(pred_boxes_per_class))
+        FP: torch.Tensor = torch.zeros(len(pred_boxes_per_class))
 
         # Count the TP and FP samples
         for pred_idx, pred_box in enumerate(pred_boxes_per_class):
