@@ -118,4 +118,113 @@ def non_max_suppression(bboxes: list[torch.Tensor], iou_threshold: float = 0.5, 
         final_bboxes.append(chosen_box)
 
     return final_bboxes
+
+def mean_average_precision(pred_boxes: list[torch.Tensor], labels_boxes: list[torch.Tensor], iou_threshold: float = 0.5, box_format: BoxFormat = BoxFormat.CORNER_POINT, num_classes: int = 20) -> float:
+    """
+    Compute the mean average precision (mAP) using the given IoU threshold.
+
+    Args:
+        pred_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the predicted bounding boxes in the format (sample_idx, class, score, x1, y1, x2, y2).
+        labels_boxes (list[torch.Tensor]): A list of tensors, each of shape (7) containing the ground truth bounding boxes in the format (sample_idx, class, x1, y1, x2, y2).
+        iou_threshold (float): The Intersection over Union (IoU) threshold for determining true positives. Default is 0.5.
+        box_format (BoxFormat): The format of the bounding boxes. Default is BoxFormat.CORNER_POINT.
+        num_classes (int): The number of classes in the dataset. Default is 20.
+
+    Returns:
+        float: The mean average precision (mAP) value.
+    """
+    if not isinstance(pred_boxes, list) or not all(isinstance(box, torch.Tensor) for box in pred_boxes):
+        raise TypeError(f"pred_boxes must be a list of torch.Tensor, got {type(pred_boxes)}")
+    if not isinstance(labels_boxes, list) or not all(isinstance(box, torch.Tensor) for box in labels_boxes):
+        raise TypeError(f"labels_boxes must be a list of torch.Tensor, got {type(labels_boxes)}")
+    if not isinstance(iou_threshold, float):
+        raise TypeError(f"iou_threshold must be a float, got {type(iou_threshold)}")
+    if not isinstance(box_format, BoxFormat):
+        raise TypeError(f"box_format must be an instance of BoxFormat, got {type(box_format)}")
+    if not isinstance(num_classes, int):
+        raise TypeError(f"num_classes must be an int, got {type(num_classes)}")
+
+    if not (0 <= iou_threshold <= 1):
+        raise ValueError(f"iou_threshold must be a float between 0 and 1, got {iou_threshold}")
+    if not (num_classes > 0):
+        raise ValueError(f"num_classes must be a positive integer, got {num_classes}")
+
+    if pred_boxes.ndim != 1 or pred_boxes.shape[1] != 7:
+        raise ValueError(f"pred_boxes must be of shape (7,), got {pred_boxes.shape}")
+    if labels_boxes.ndim != 1 or labels_boxes.shape[1] != 7:
+        raise ValueError(f"labels_boxes must be of shape (7,), got {labels_boxes.shape}")
+
+    average_precisions: list[torch.Tensor] = []
+
+    for c in range(num_classes):
+        # Get predicted and ground truth boxes for the current class
+        pred_boxes_per_class: list[torch.Tensor] = [box for box in pred_boxes if box[1] == c]
+        labels_boxes_per_class: list[torch.Tensor] = [box for box in labels_boxes if box[1] == c]
+
+        num_gt_boxes: int = len(labels_boxes_per_class)
+        TP: torch.Tensor = torch.zeros(len(pred_boxes_per_class))
+        FP: torch.Tensor = torch.zeros(len(pred_boxes_per_class))
+
+        # Count the number of ground truth boxes per sample for the current class
+        coverage_per_sample: dict[int, int] = {}
+        for box in labels_boxes_per_class:
+            sample_idx = box[0]
+            if sample_idx not in coverage_per_sample:
+                coverage_per_sample[sample_idx] = 1
+            else:
+                coverage_per_sample[sample_idx] += 1
+
+        for key, value in coverage_per_sample.items():
+            coverage_per_sample[key] = torch.zeros(value) # {0: tensor([0, 0]), 1: tensor([0, 0, 0])}
+
+        coverage_per_sample: dict[int, torch.Tensor]
+
+        # Order predicted boxes by confidence score in descending order
+        pred_boxes_per_class.sort(key=lambda x: x[2], reverse=True)
+
+        # Count the TP and FP samples
+        for pred_idx, pred_box in enumerate(pred_boxes_per_class):
+            sample_idx = pred_box[0]
+
+            # Get ground truth boxes for the current sample
+            gt_boxes: list[torch.Tensor] = [box for box in labels_boxes_per_class if box[0] == sample_idx]
     
+            max_iou: float = 0
+            max_index: int = -1
+
+            # Get the ground truth box with the highest IoU for the current predicted box
+            for i, gt_box in enumerate(gt_boxes):
+                iou = intersection_over_union(pred_box[3:].unsqueeze(0), gt_box[2:].unsqueeze(0), box_format)
+                if iou > max_iou:
+                    max_iou = iou
+                    max_index = i
+
+            if max_iou > iou_threshold:
+                if coverage_per_sample[sample_idx][max_index] == 0:
+                    # TP: if it has IoU > threshold and the corresponding ground truth box has not been detected yet
+                    TP[pred_idx] = 1
+                    coverage_per_sample[sample_idx][max_index] = 1
+                else:
+                    # FP: if it has IoU > threshold but the corresponding ground truth box has already been detected
+                    FP[pred_idx] = 1
+            else:
+                # FP: if it has IoU < threshold
+                FP[pred_idx] = 1
+
+        # Compute cumulative true positives and false positives
+        TP_cumsum: torch.Tensor = torch.cumsum(TP, dim=0) # [1, 0, 1, 1, 0] -> [1, 1, 2, 3, 3]
+        FP_cumsum: torch.Tensor = torch.cumsum(FP, dim=0)
+
+        # Compute metrics
+        recall = TP_cumsum / (num_gt_boxes + 1e-6)
+        precision = TP_cumsum / (TP_cumsum + FP_cumsum + 1e-6)
+
+        # Add the (0, 1) point to the precision-recall curve
+        recall = torch.cat((torch.tensor([0]), recall))
+        precision = torch.cat((torch.tensor([1]), precision))
+
+        # Compute AP for the current class
+        ap = torch.trapz(precision, recall)
+        average_precisions.append(ap)
+
+    return sum(average_precisions) / len(average_precisions) if average_precisions else 0.0
